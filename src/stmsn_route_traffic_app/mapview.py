@@ -34,6 +34,10 @@ def corridor_map(routes_df: pd.DataFrame, route_names: list[str]) -> folium.Map:
         lons = [c[1] for c in all_coords]
         m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
 
+    m.get_root().html.add_child(folium.Element(
+        '<style>.leaflet-control-attribution { font-size: 8px !important; opacity: 0.5; }</style>'
+    ))
+
     # Simple legend via HTML
     legend_html = """
     <div style="position: fixed; bottom: 30px; left: 30px; z-index: 1000;
@@ -41,7 +45,7 @@ def corridor_map(routes_df: pd.DataFrame, route_names: list[str]) -> folium.Map:
                 border: 1px solid #ccc; font-size: 13px; line-height: 1.8;">
     """
     for direction, color in DIRECTION_COLORS.items():
-        legend_html += f'<span style="color:{color};">&#9644;</span> {direction}<br>'
+        legend_html += f'<span style="color:{color};">&#9644;</span> <span style="color:#000;">{direction}</span><br>'
     legend_html += "</div>"
     m.get_root().html.add_child(folium.Element(legend_html))
 

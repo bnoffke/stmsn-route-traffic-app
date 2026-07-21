@@ -85,6 +85,42 @@ def load_daily(
     return df
 
 
+# NOTE: Daily Monitor loads the corridor's full unfiltered date range. If this grows,
+# we may consolidate to a single shared loaded dataset across pages and do date
+# filtering in-dataframe for the Time Period Comparison page instead of re-querying.
+@st.cache_data(ttl=900)
+def load_slots_all(
+    route_names: tuple[str, ...],
+    windows: tuple[str, ...],
+    include_weekends: bool = False,
+) -> pd.DataFrame:
+    """Slot-grain rows for the given routes across ALL dates (no date filter)."""
+    con = get_con()
+    names_sql = ", ".join(f"'{n}'" for n in route_names)
+    wins_sql = ", ".join(f"'{w}'" for w in windows)
+    weekend_filter = "" if include_weekends else "AND is_weekday"
+    query = f"""
+        SELECT
+            route_name,
+            direction,
+            corridor,
+            request_date_local,
+            day_of_week_name,
+            slot_local,
+            time_window,
+            is_weekday,
+            is_holiday,
+            delay_seconds,
+            duration_seconds,
+            travel_time_index
+        FROM silver.fact_route_traffic
+        WHERE route_name IN ({names_sql})
+          AND time_window IN ({wins_sql})
+          {weekend_filter}
+    """
+    return con.sql(query).df()
+
+
 @st.cache_data(ttl=900)
 def load_slots(
     route_names: tuple[str, ...],

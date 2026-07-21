@@ -134,6 +134,89 @@ def coverage_heatmap(df: pd.DataFrame, period: str) -> go.Figure:
     return fig
 
 
+DIRECTION_COLORS = {"NB": "#1f77b4", "SB": "#ff7f0e"}
+
+
+def daily_profile_chart(
+    all_df: pd.DataFrame,
+    selected_date,
+    window: str,
+    direction: str,
+    hist_df: pd.DataFrame | None = None,
+) -> go.Figure:
+    """
+    x=slot_local, y=duration_seconds for one window+direction.
+    Solid line = selected day. Dotted grey lines = median/p25/p75 across prior same-weekday days.
+    hist_df, if provided, replaces all_df as the reference pool for percentile lines.
+    """
+    sub = all_df[(all_df["time_window"] == window) & (all_df["direction"] == direction)].copy()
+    if sub.empty:
+        fig = go.Figure()
+        fig.update_layout(title=f"{window} {direction} — no data", height=300)
+        return fig
+
+    selected_date_str = str(selected_date)
+    dow = pd.Timestamp(selected_date).strftime("%A")
+
+    day_df = sub[sub["request_date_local"] == selected_date_str].sort_values("slot_local")
+
+    ref_source = hist_df if hist_df is not None else all_df
+    sub_ref = ref_source[(ref_source["time_window"] == window) & (ref_source["direction"] == direction)]
+    ref_df = sub_ref[(sub_ref["day_of_week_name"] == dow) & (sub_ref["request_date_local"] != selected_date_str)]
+
+    ref_stats = (
+        ref_df.groupby("slot_local")["duration_seconds"]
+        .quantile([0.25, 0.5, 0.75])
+        .unstack()
+        .rename(columns={0.25: "p25", 0.5: "median", 0.75: "p75"})
+        .reset_index()
+        .sort_values("slot_local")
+    )
+    n_days = ref_df.groupby("slot_local")["request_date_local"].nunique().rename("n_days")
+    ref_stats = ref_stats.join(n_days, on="slot_local")
+
+    color = DIRECTION_COLORS.get(direction, "#888888")
+    fig = go.Figure()
+
+    if not ref_stats.empty:
+        fig.add_trace(go.Scatter(
+            x=ref_stats["slot_local"], y=ref_stats["p75"],
+            customdata=ref_stats[["n_days"]],
+            mode="lines", line=dict(color="gray", dash="dot", width=1),
+            name="p75 (hist)", hovertemplate="p75: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=ref_stats["slot_local"], y=ref_stats["median"],
+            customdata=ref_stats[["n_days"]],
+            mode="lines", line=dict(color="gray", dash="dash", width=1.5),
+            name="median (hist)", hovertemplate="Median: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=ref_stats["slot_local"], y=ref_stats["p25"],
+            customdata=ref_stats[["n_days"]],
+            mode="lines", line=dict(color="gray", dash="dot", width=1),
+            name="p25 (hist)", hovertemplate="p25: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+
+    if not day_df.empty:
+        fig.add_trace(go.Scatter(
+            x=day_df["slot_local"], y=day_df["duration_seconds"],
+            mode="lines+markers", line=dict(color=color, width=2),
+            name=f"{direction} today",
+            hovertemplate="Slot: %{x}<br>Duration: %{y:.0f}s<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=f"{window} — {direction}",
+        xaxis_title="Time slot",
+        yaxis_title="Duration (s)",
+        height=300,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(t=60, b=40),
+    )
+    return fig
+
+
 def _hex_to_rgb(hex_color: str) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
