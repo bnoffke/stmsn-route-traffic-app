@@ -94,4 +94,4 @@ else:
         for i, direction in enumerate(all_dirs):
             with cols[i]:
                 fig = daily_profile_chart(slot_df, selected_date_str, window, direction, hist_df=hist_df)
-                st.plotly_chart(fig, use_container_width=True, key=f"daily_{window}_{direction}")
+                st.plotly_chart(fig, use_container_width=True, key=f"daily_{window}_{direction}", config={"displayModeBar": False, "scrollZoom": False})

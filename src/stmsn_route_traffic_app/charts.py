@@ -211,6 +211,7 @@ def daily_profile_chart(
         xaxis_title="Time slot",
         yaxis_title="Duration (s)",
         height=300,
+        dragmode=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         margin=dict(t=60, b=40),
     )
