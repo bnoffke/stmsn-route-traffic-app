@@ -208,8 +208,8 @@ def daily_profile_chart(
 
     fig.update_layout(
         title=f"{window} — {direction}",
-        xaxis_title="Time slot",
-        yaxis_title="Duration (s)",
+        xaxis=dict(title="Time slot", fixedrange=True),
+        yaxis=dict(title="Duration (s)", fixedrange=True),
         height=300,
         dragmode=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
