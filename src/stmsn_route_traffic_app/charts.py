@@ -218,6 +218,123 @@ def daily_profile_chart(
     return fig
 
 
+WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+
+def weekly_profile_chart(
+    all_df: pd.DataFrame,
+    week_start,
+    week_end,
+    window: str,
+    direction: str,
+    hist_df: pd.DataFrame | None = None,
+) -> go.Figure:
+    """
+    x=day_of_week (Mon–Fri), y=duration_seconds for one window+direction.
+    Solid line = current week's per-day median. Dotted grey lines = p25/median/p75
+    of historical daily medians by weekday (excluding current week).
+    """
+    week_start_str = str(week_start)
+    week_end_str = str(week_end)
+
+    sub = all_df[(all_df["time_window"] == window) & (all_df["direction"] == direction)].copy()
+    if sub.empty:
+        fig = go.Figure()
+        fig.update_layout(title=f"{window} {direction} — no data", height=300)
+        return fig
+
+    # Current-week line: per-day median, reindexed to Mon–Fri order
+    week_rows = sub[
+        (sub["request_date_local"] >= week_start_str) &
+        (sub["request_date_local"] <= week_end_str)
+    ]
+    week_medians = (
+        week_rows.groupby("day_of_week_name")["duration_seconds"]
+        .median()
+        .reindex(WEEKDAY_ORDER)
+    )
+
+    # Historical band: exclude current week, compute per-date daily median,
+    # then per weekday take p25/50/75 across those daily medians.
+    ref_source = hist_df if hist_df is not None else all_df
+    sub_ref = ref_source[
+        (ref_source["time_window"] == window) &
+        (ref_source["direction"] == direction) &
+        (
+            (ref_source["request_date_local"] < week_start_str) |
+            (ref_source["request_date_local"] > week_end_str)
+        )
+    ]
+
+    ref_stats = pd.DataFrame()
+    if not sub_ref.empty:
+        daily_medians = (
+            sub_ref.groupby(["request_date_local", "day_of_week_name"])["duration_seconds"]
+            .median()
+            .reset_index()
+        )
+        ref_stats = (
+            daily_medians.groupby("day_of_week_name")["duration_seconds"]
+            .agg(
+                p25=lambda x: np.percentile(x, 25),
+                median="median",
+                p75=lambda x: np.percentile(x, 75),
+                n_days="count",
+            )
+            .reindex(WEEKDAY_ORDER)
+            .reset_index()
+        )
+
+    color = DIRECTION_COLORS.get(direction, "#888888")
+    fig = go.Figure()
+
+    if not ref_stats.empty:
+        valid = ref_stats.dropna(subset=["p75"])
+        fig.add_trace(go.Scatter(
+            x=valid["day_of_week_name"], y=valid["p75"],
+            customdata=valid[["n_days"]],
+            mode="lines", line=dict(color="gray", dash="dot", width=1),
+            name="p75 (hist)", hovertemplate="p75: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=valid["day_of_week_name"], y=valid["median"],
+            customdata=valid[["n_days"]],
+            mode="lines", line=dict(color="gray", dash="dash", width=1.5),
+            name="median (hist)", hovertemplate="Median: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=valid["day_of_week_name"], y=valid["p25"],
+            customdata=valid[["n_days"]],
+            mode="lines", line=dict(color="gray", dash="dot", width=1),
+            name="p25 (hist)", hovertemplate="p25: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+
+    week_plot = week_medians.dropna()
+    if not week_plot.empty:
+        fig.add_trace(go.Scatter(
+            x=week_plot.index, y=week_plot.values,
+            mode="lines+markers", line=dict(color=color, width=2),
+            name=f"{direction} this week",
+            hovertemplate="Day: %{x}<br>Duration: %{y:.0f}s<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=f"{window} — {direction}",
+        xaxis=dict(
+            title="Day of week",
+            categoryorder="array",
+            categoryarray=WEEKDAY_ORDER,
+            fixedrange=True,
+        ),
+        yaxis=dict(title="Duration (s)", fixedrange=True),
+        height=300,
+        dragmode=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(t=60, b=40),
+    )
+    return fig
+
+
 def _hex_to_rgb(hex_color: str) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)

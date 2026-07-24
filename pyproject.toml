@@ -16,6 +16,7 @@ dependencies = [
     "stmsn-query",
     "streamlit>=1.59.2",
     "streamlit-folium>=0.27.2",
+    "tzdata>=2024.1",
 ]
 
 [project.scripts]
