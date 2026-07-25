@@ -137,6 +137,20 @@ def coverage_heatmap(df: pd.DataFrame, period: str) -> go.Figure:
 DIRECTION_COLORS = {"NB": "#1f77b4", "SB": "#ff7f0e"}
 
 
+def _zero_based_top(*series) -> float:
+    """Upper y-limit for a zero-anchored axis: 10% headroom above the largest value.
+
+    Keeps the axis crossing at zero so a modest change in travel time reads as a
+    modest change rather than filling the plot. Falls back to 60s when there's
+    nothing to plot.
+    """
+    values = [
+        s.max() for s in series
+        if s is not None and len(s) and pd.notna(s.max())
+    ]
+    return max(values) * 1.1 if values else 60.0
+
+
 def daily_profile_chart(
     all_df: pd.DataFrame,
     selected_date,
@@ -209,7 +223,12 @@ def daily_profile_chart(
     fig.update_layout(
         title=f"{window} — {direction}",
         xaxis=dict(title="Time slot", fixedrange=True),
-        yaxis=dict(title="Duration (s)", fixedrange=True),
+        yaxis=dict(
+            title="Duration (s)",
+            fixedrange=True,
+            rangemode="tozero",
+            range=[0, _zero_based_top(day_df["duration_seconds"], ref_stats.get("p75"))],
+        ),
         height=300,
         dragmode=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
@@ -326,7 +345,12 @@ def weekly_profile_chart(
             categoryarray=WEEKDAY_ORDER,
             fixedrange=True,
         ),
-        yaxis=dict(title="Duration (s)", fixedrange=True),
+        yaxis=dict(
+            title="Duration (s)",
+            fixedrange=True,
+            rangemode="tozero",
+            range=[0, _zero_based_top(week_plot, ref_stats.get("p75"))],
+        ),
         height=300,
         dragmode=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
