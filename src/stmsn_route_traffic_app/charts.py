@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import timedelta
 
 PERIOD_COLORS = {"A": "#1f77b4", "B": "#ff7f0e"}
 DIRECTION_DASH = {"NB": "solid", "SB": "dash"}
@@ -363,3 +364,151 @@ def _hex_to_rgb(hex_color: str) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"{r},{g},{b}"
+
+
+def trend_chart(
+    df: pd.DataFrame,
+    granularity: str,
+    window: str,
+    direction: str,
+    metric_col: str = "duration_seconds",
+    change_dates: list | None = None,
+) -> go.Figure:
+    """
+    Long trendline chart for Weekly View tab.
+    granularity: "Week" | "Day" | "Intraday"
+    df is pre-filtered to date range + holiday preference.
+    """
+    sub = df[(df["time_window"] == window) & (df["direction"] == direction)].copy()
+    if sub.empty:
+        fig = go.Figure()
+        fig.update_layout(title=f"{window} — {direction} — no data", height=300)
+        return fig
+
+    color = DIRECTION_COLORS.get(direction, "#888888")
+    fig = go.Figure()
+    rangebreaks = [dict(bounds=["sat", "mon"])]
+
+    if granularity == "Intraday":
+        sub["_x"] = pd.to_datetime(
+            sub["request_date_local"].astype(str) + " " + sub["slot_local"]
+        )
+        sub = sub.sort_values("_x")
+
+        # Derive hour bounds from actual slot data to avoid hardcoding AM/PM hours
+        slot_hours = pd.to_datetime(sub["slot_local"], format="%H:%M").dt.hour
+        min_hour = int(slot_hours.min())
+        max_hour = int(slot_hours.max())
+        # rangebreak hides from max_hour+1 back around to min_hour (overnight gap)
+        if max_hour + 1 < 24:
+            rangebreaks.append(dict(bounds=[max_hour + 1, min_hour], pattern="hour"))
+
+        fig.add_trace(go.Scatter(
+            x=sub["_x"], y=sub[metric_col],
+            mode="lines", line=dict(color=color, width=1),
+            name=f"{direction}",
+            hovertemplate="Date: %{x}<br>Duration: %{y:.0f}s<extra></extra>",
+        ))
+
+        y_top = _zero_based_top(sub[metric_col])
+
+    else:
+        # Week or Day aggregation
+        if granularity == "Week":
+            sub["_date"] = pd.to_datetime(sub["request_date_local"])
+            sub["_x"] = sub["_date"] - pd.to_timedelta(sub["_date"].dt.weekday, unit="D")
+            agg = (
+                sub.groupby("_x")[metric_col]
+                .agg(
+                    p25=lambda x: np.percentile(x, 25),
+                    median="median",
+                    p75=lambda x: np.percentile(x, 75),
+                    n="count",
+                )
+                .reset_index()
+            )
+            n_days_per_week = (
+                sub.groupby("_x")["request_date_local"].nunique().rename("n_days")
+            )
+            agg = agg.join(n_days_per_week, on="_x")
+            x_title = "Week of (Monday)"
+            partial_threshold = 5  # full week = 5 days
+            last_is_partial = agg["n_days"].iloc[-1] < partial_threshold if not agg.empty else False
+        else:  # Day
+            sub["_x"] = pd.to_datetime(sub["request_date_local"])
+            agg = (
+                sub.groupby("_x")[metric_col]
+                .agg(
+                    p25=lambda x: np.percentile(x, 25),
+                    median="median",
+                    p75=lambda x: np.percentile(x, 75),
+                    n="count",
+                )
+                .reset_index()
+            )
+            agg["n_days"] = 1
+            x_title = "Date"
+            # Day is partial if the last date has fewer slots than the max seen
+            max_n = agg["n"].max() if not agg.empty else 1
+            last_is_partial = agg["n"].iloc[-1] < max_n if not agg.empty else False
+
+        agg = agg.sort_values("_x")
+
+        # p25 / p75 dotted grey lines
+        fig.add_trace(go.Scatter(
+            x=agg["_x"], y=agg["p75"],
+            customdata=agg[["n"]],
+            mode="lines", line=dict(color="gray", dash="dot", width=1),
+            name="p75", hovertemplate="p75: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=agg["_x"], y=agg["p25"],
+            customdata=agg[["n"]],
+            mode="lines", line=dict(color="gray", dash="dot", width=1),
+            name="p25", hovertemplate="p25: %{y:.0f}s (n=%{customdata[0]})<extra></extra>",
+        ))
+
+        # Median colored line — last point is open circle when partial
+        cd_cols = ["n", "n_days"] if granularity == "Week" else ["n"]
+        hover = "Median: %{y:.0f}s (n=%{customdata[0]}, days=%{customdata[1]})<extra></extra>" if granularity == "Week" else "Median: %{y:.0f}s (n=%{customdata[0]})<extra></extra>"
+        n = len(agg)
+        symbols = ["circle-open" if (last_is_partial and i == n - 1) else "circle" for i in range(n)]
+        fig.add_trace(go.Scatter(
+            x=agg["_x"], y=agg["median"],
+            customdata=agg[cd_cols],
+            mode="lines+markers",
+            line=dict(color=color, width=2),
+            marker=dict(color=color, symbol=symbols),
+            name=f"{direction} median",
+            hovertemplate=hover,
+        ))
+
+        y_top = _zero_based_top(agg["median"], agg["p75"])
+
+    for cd in (change_dates or []):
+        # Snap weekend dates to preceding Friday so the line isn't hidden by rangebreaks
+        ts = pd.Timestamp(cd)
+        if ts.weekday() > 4:
+            ts = ts - timedelta(days=ts.weekday() - 4)
+        fig.add_vline(x=ts, line=dict(color="gray", dash="dot", width=1.5))
+
+    fig.update_layout(
+        title=f"{window} — {direction}",
+        xaxis=dict(
+            title=x_title if granularity != "Intraday" else "Date / Time",
+            type="date",
+            fixedrange=True,
+            rangebreaks=rangebreaks,
+        ),
+        yaxis=dict(
+            title="Duration (s)",
+            fixedrange=True,
+            rangemode="tozero",
+            range=[0, y_top],
+        ),
+        height=300,
+        dragmode=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(t=60, b=40),
+    )
+    return fig

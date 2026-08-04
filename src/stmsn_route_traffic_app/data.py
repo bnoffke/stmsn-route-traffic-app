@@ -21,6 +21,21 @@ def load_date_range() -> tuple[date, date]:
 
 
 @st.cache_data(ttl=3600)
+def load_config_changes() -> pd.DataFrame:
+    """Corridor config/construction change events. Columns: corridor, effective_date, description, source_url."""
+    con = get_con()
+    # Join to dim_route to get the canonical corridor name used in fact tables
+    return con.sql("""
+        SELECT DISTINCT d.corridor, c.effective_date, c.description, c.source_url
+        FROM reference.config_changes c
+        JOIN (SELECT DISTINCT corridor FROM silver.dim_route) d
+          ON d.corridor ILIKE '%' || c.corridor || '%'
+          OR c.corridor ILIKE '%' || d.corridor || '%'
+        ORDER BY c.effective_date
+    """).df()
+
+
+@st.cache_data(ttl=3600)
 def load_routes() -> pd.DataFrame:
     """Loads dim_route once per session. Columns: route_name, corridor, direction, encoded_polyline."""
     con = get_con()

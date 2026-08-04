@@ -2,12 +2,13 @@ import streamlit as st
 from datetime import timedelta
 from streamlit_folium import st_folium
 
-from stmsn_route_traffic_app.data import load_routes, load_slots_all, load_date_range
-from stmsn_route_traffic_app.charts import daily_profile_chart, weekly_profile_chart
+from stmsn_route_traffic_app.data import load_routes, load_slots_all, load_date_range, load_config_changes
+from stmsn_route_traffic_app.charts import daily_profile_chart, weekly_profile_chart, trend_chart
 from stmsn_route_traffic_app.mapview import corridor_map
 from stmsn_route_traffic_app.util import chicago_today, week_bounds
 
 WINDOWS = ("AM", "PM")
+PLOTLY_CONFIG = {"displayModeBar": False, "scrollZoom": False}
 
 
 # ── Shared state ──────────────────────────────────────────────────────────────
@@ -16,6 +17,12 @@ corridor = st.session_state.get("corridor", sorted(routes_df["corridor"].unique(
 corridor_routes = routes_df[routes_df["corridor"] == corridor]
 all_dirs = sorted(corridor_routes["direction"].unique())
 corridor_route_names = tuple(corridor_routes["route_name"].tolist())
+
+# ── Config changes for this corridor ─────────────────────────────────────────
+changes_df = load_config_changes()
+corridor_changes = changes_df[changes_df["corridor"] == corridor]
+change_dates = sorted(corridor_changes["effective_date"].dt.date.unique())
+first_change = change_dates[0] if change_dates else None
 
 # ── Load all slot data (needed before sidebar so we can show data freshness) ──
 slot_df = load_slots_all(corridor_route_names, WINDOWS)
@@ -47,13 +54,26 @@ with st.sidebar:
     st.caption(freshness_label)
 
     with st.expander("Filter historical data", expanded=False):
+        default_hist_end = (first_change - timedelta(days=1)) if first_change else today_ct
+        hist_range_key = f"hist_date_range_{corridor}"
+        sentinel_key = f"hist_date_range_default_{corridor}"
+        # Reset widget to the effective date if the change date differs from what was last applied
+        if st.session_state.get(sentinel_key) != default_hist_end:
+            st.session_state[hist_range_key] = (data_start, default_hist_end)
+            st.session_state[sentinel_key] = default_hist_end
         hist_range = st.date_input(
             "Date range",
-            value=(data_start, today_ct),
+            value=(data_start, default_hist_end),
             min_value=data_start,
             max_value=today_ct,
-            key="hist_date_range",
+            key=hist_range_key,
         )
+        if first_change and not corridor_changes.empty:
+            row = corridor_changes.iloc[0]
+            desc = row["description"]
+            url = row["source_url"]
+            caption_text = f"Baseline ends at {first_change} change: [{desc}]({url})" if url else f"Baseline ends at {first_change} change: {desc}"
+            st.caption(caption_text)
         include_holidays = st.toggle("Include holidays", value=False, key="hist_holidays")
 
     with st.popover("View corridor map", use_container_width=True):
@@ -96,10 +116,16 @@ week_hist_df = slot_df[
 if not include_holidays:
     week_hist_df = week_hist_df[week_hist_df["is_holiday"] != True]
 
+# ── Weekly View trend pool ─────────────────────────────────────────────────────
+# All data through selected day — not filtered by hist_range so the full trend is visible
+trend_df = slot_df[slot_df["request_date_local"] <= selected_date_str].copy()
+if not include_holidays:
+    trend_df = trend_df[trend_df["is_holiday"] != True]
+
 # ── Top row ───────────────────────────────────────────────────────────────────
 st.subheader(f"Corridor: {corridor}")
 
-tab_rt, tab_daily = st.tabs(["Real Time View", "Daily View"])
+tab_rt, tab_daily, tab_weekly = st.tabs(["Real Time View", "Daily View", "Weekly View"])
 
 # ── Real Time View tab ────────────────────────────────────────────────────────
 with tab_rt:
@@ -126,12 +152,12 @@ with tab_rt:
         st.info(f"No data for {selected_date_str}. Select a different day.")
     else:
         for window in WINDOWS:
-            st.subheader(f"{window} peak")
+            #st.subheader(f"{window} peak")
             cols = st.columns(len(all_dirs))
             for i, direction in enumerate(all_dirs):
                 with cols[i]:
                     fig = daily_profile_chart(slot_df, selected_date_str, window, direction, hist_df=hist_df)
-                    st.plotly_chart(fig, use_container_width=True, key=f"rt_{window}_{direction}", config={"displayModeBar": False, "scrollZoom": False})
+                    st.plotly_chart(fig, use_container_width=True, key=f"rt_{window}_{direction}", config=PLOTLY_CONFIG)
 
 # ── Daily View tab ────────────────────────────────────────────────────────────
 with tab_daily:
@@ -158,9 +184,33 @@ with tab_daily:
             st.metric(label, value)
 
     for window in WINDOWS:
-        st.subheader(f"{window} peak")
+        #st.subheader(f"{window} peak")
         cols = st.columns(len(all_dirs))
         for i, direction in enumerate(all_dirs):
             with cols[i]:
                 fig = weekly_profile_chart(slot_df, week_start, week_end, window, direction, hist_df=week_hist_df)
-                st.plotly_chart(fig, use_container_width=True, key=f"daily_{window}_{direction}", config={"displayModeBar": False, "scrollZoom": False})
+                st.plotly_chart(fig, use_container_width=True, key=f"daily_{window}_{direction}", config=PLOTLY_CONFIG)
+
+# ── Weekly View tab ───────────────────────────────────────────────────────────
+with tab_weekly:
+    radio_col, legend_col = st.columns([3, 2])
+    with radio_col:
+        granularity = st.radio(
+            "Granularity", ["Week", "Day", "Intraday"],
+            horizontal=True, key="trend_granularity", label_visibility="collapsed",
+        )
+    with legend_col:
+        st.caption("○ = incomplete data")
+
+    if trend_df.empty:
+        st.info("No data in the selected range.")
+    else:
+        for window in WINDOWS:
+            #st.subheader(f"{window} peak")
+            cols = st.columns(len(all_dirs))
+            for i, direction in enumerate(all_dirs):
+                with cols[i]:
+                    fig = trend_chart(trend_df, granularity, window, direction, change_dates=change_dates)
+                    st.plotly_chart(fig, use_container_width=True,
+                                    key=f"trend_{granularity}_{window}_{direction}",
+                                    config=PLOTLY_CONFIG)
