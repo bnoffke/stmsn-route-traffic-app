@@ -388,6 +388,9 @@ def trend_chart(
     color = DIRECTION_COLORS.get(direction, "#888888")
     fig = go.Figure()
     rangebreaks = [dict(bounds=["sat", "mon"])]
+    # Intraday hides the overnight hours, so midnight is inside a rangebreak and a line
+    # drawn there collapses to an arbitrary spot. Anchor to the first visible hour instead.
+    vline_hour = 0
 
     if granularity == "Intraday":
         sub["_x"] = pd.to_datetime(
@@ -402,6 +405,7 @@ def trend_chart(
         # rangebreak hides from max_hour+1 back around to min_hour (overnight gap)
         if max_hour + 1 < 24:
             rangebreaks.append(dict(bounds=[max_hour + 1, min_hour], pattern="hour"))
+        vline_hour = min_hour
 
         fig.add_trace(go.Scatter(
             x=sub["_x"], y=sub[metric_col],
@@ -487,9 +491,10 @@ def trend_chart(
 
     for cd in (change_dates or []):
         # Snap weekend dates to preceding Friday so the line isn't hidden by rangebreaks
-        ts = pd.Timestamp(cd)
+        ts = pd.Timestamp(cd).normalize()
         if ts.weekday() > 4:
             ts = ts - timedelta(days=ts.weekday() - 4)
+        ts = ts + pd.Timedelta(hours=vline_hour)
         fig.add_vline(x=ts, line=dict(color="gray", dash="dot", width=1.5))
 
     fig.update_layout(
