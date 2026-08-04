@@ -54,7 +54,7 @@ with st.sidebar:
     st.caption(freshness_label)
 
     with st.expander("Filter historical data", expanded=False):
-        default_hist_end = (first_change - timedelta(days=1)) if first_change else today_ct
+        default_hist_end = first_change or today_ct
         hist_range_key = f"hist_date_range_{corridor}"
         sentinel_key = f"hist_date_range_default_{corridor}"
         # Reset widget to the effective date if the change date differs from what was last applied
@@ -93,10 +93,12 @@ week_start, week_end = week_bounds(selected_date)
 week_start_str = str(week_start)
 
 # ── Real Time View historical pool ────────────────────────────────────────────
-# Cap at strictly before selected date so the pool is always "historical"
+# hist_range_end is exclusive (it's the config-change effective date), and the pool is
+# always capped strictly before the selected date so it stays "historical".
+rt_end = min(hist_range_end, selected_date)
 hist_df = slot_df[
     (slot_df["request_date_local"] >= str(hist_range_start)) &
-    (slot_df["request_date_local"] < selected_date_str)
+    (slot_df["request_date_local"] < str(rt_end))
 ].copy()
 if not include_holidays:
     hist_df = hist_df[hist_df["is_holiday"] != True]
@@ -105,7 +107,7 @@ if not include_holidays:
 # Snap hist_range to week boundaries (start → Monday, end → Sunday of chosen week)
 # then cap at the day before the selected week.
 snap_start = hist_range_start - timedelta(days=hist_range_start.weekday())
-snap_end_raw = hist_range_end
+snap_end_raw = hist_range_end - timedelta(days=1)  # hist_range_end is exclusive
 snap_end = snap_end_raw + timedelta(days=6 - snap_end_raw.weekday())
 effective_end = min(snap_end, week_start - timedelta(days=1))
 
