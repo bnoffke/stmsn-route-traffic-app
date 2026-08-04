@@ -202,7 +202,10 @@ with tab_weekly:
             horizontal=True, key="trend_granularity", label_visibility="collapsed",
         )
     with legend_col:
-        st.caption("○ = incomplete data")
+        legend_notes = ["○ = incomplete data"]
+        if change_dates:
+            legend_notes.append("┊ = lane config change")
+        st.caption(" &nbsp;·&nbsp; ".join(legend_notes), unsafe_allow_html=True)
 
     if trend_df.empty:
         st.info("No data in the selected range.")
